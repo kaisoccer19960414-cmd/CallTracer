@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>CallTracer Viewer</title>
+<style>
+  /* デザインは最小限。動作確認を優先し、見やすさのための最低限のみ。 */
+  body {
+    font-family: monospace;
+    background: #1e1e1e;
+    color: #ddd;
+    margin: 0;
+    padding: 0;
+  }
+  #status {
+    position: sticky;
+    top: 0;
+    background: #333;
+    padding: 6px 10px;
+    font-size: 13px;
+    border-bottom: 1px solid #555;
+  }
+  #status.connected { color: #7CFC00; }
+  #status.disconnected { color: #ff6b6b; }
+
+  #timeline {
+    padding: 8px 10px;
+    white-space: pre;
+    line-height: 1.5;
+  }
+
+  .row { }
+
+  .call { color: #61dafb; }      /* Python callは水色 */
+  .return { color: #999; }        /* returnはグレー */
+  .depth-indent { color: #555; }  /* インデント部分は薄く */
+
+  .source-python { }
+  .source-javascript { color: #f7df1e; } /* JS系は黄色寄りに */
+</style>
+</head>
+<body>
+
+<div id="status" class="disconnected">未接続</div>
+<div id="timeline"></div>
+
+<script>
+  // 最小構成: WebSocketへ接続し、届いたイベントをそのまま時系列に描画するだけ。
+  // 統合ロジックや高度な整形はEngine側の責務なので、Viewerは「受け取って表示する」に徹する。
+
+  const WS_URL = "ws://" + location.host + "/ws";
+  const statusEl = document.getElementById("status");
+  const timelineEl = document.getElementById("timeline");
+
+  function connect() {
+    const ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      statusEl.textContent = "接続中: " + WS_URL;
+      statusEl.className = "connected";
+    };
+
+    ws.onclose = () => {
+      statusEl.textContent = "切断されました。3秒後に再接続します...";
+      statusEl.className = "disconnected";
+      setTimeout(connect, 3000);
+    };
+
+    ws.onerror = () => {
+      ws.close();
+    };
+
+    ws.onmessage = (msg) => {
+      let event;
+      try {
+        event = JSON.parse(msg.data);
+      } catch (e) {
+        console.error("JSONパース失敗:", msg.data);
+        return;
+      }
+      renderEvent(event);
+    };
+  }
+
+  function renderEvent(event) {
+    const depth = event.depth || 0;
+    // depthに応じたインデント(2スペース x depth数)
+    const indent = "  ".repeat(Math.max(depth - 1, 0));
+
+    const row = document.createElement("div");
+    row.className = "row";
+
+    const sourceClass = event.source === "javascript" ? "source-javascript" : "source-python";
+    const typeClass = event.type === "return" ? "return" : "call";
+
+    const arrow = event.type === "return" ? "<-" : "->";
+    const label = event.type === "return" ? "RETURN" : (event.type || "").toUpperCase();
+
+    const payload = event.payload || {};
+    const fn = payload.function || payload.url || "(unknown)";
+    const extra = event.type === "return"
+      ? ""
+      : (payload.args_summary ? "(" + payload.args_summary + ")" : (payload.method ? " " + payload.method : ""));
+
+    const time = event.timestamp
+      ? new Date(event.timestamp * 1000).toISOString().substr(11, 12)
+      : "";
+
+    row.innerHTML =
+      '<span class="depth-indent">' + indent + '</span>' +
+      '<span class="' + typeClass + ' ' + sourceClass + '">' +
+      arrow + ' ' + label + ' ' + escapeHtml(fn) + escapeHtml(extra) +
+      '</span>' +
+      '  <span style="color:#666">[' + time + ']</span>';
+
+    timelineEl.appendChild(row);
+
+    // 常に最新イベントが見えるよう自動スクロール
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  connect();
+</script>
+
+</body>
+</html>
