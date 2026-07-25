@@ -34,6 +34,13 @@ from collections import defaultdict
 from types import FrameType
 from typing import Any, Callable, Optional
 
+# CallTracer自身のパッケージディレクトリ(calltracer/ フォルダ)。
+# include_paths にたまたま含まれていても、ここは常にトレース対象から除外する。
+# 除外しないと、Engine._broadcast() の呼び出し自体がトレースされ、
+# 「イベントを送る→そのcall自体が新イベントになる→また送る→…」という
+# 自己参照ループで無限にイベントが増幅してしまう。
+_CALLTRACER_PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 class PythonAdapter:
     """sys.settrace ベースのPython関数呼び出しCollector。
@@ -88,9 +95,15 @@ class PythonAdapter:
 
     def _is_target(self, filename: str) -> bool:
         """このファイルをトレース対象とするかどうかを判定する。"""
+        abs_filename = os.path.abspath(filename)
+
+        # CallTracer自身のコードは、include_pathsの設定に関わらず常に除外する
+        # (自己参照によるイベント増幅ループを防ぐため)
+        if abs_filename.startswith(_CALLTRACER_PACKAGE_DIR):
+            return False
+
         if not self._include_paths:
             return False
-        abs_filename = os.path.abspath(filename)
         return any(
             abs_filename.startswith(prefix) for prefix in self._include_paths
         )

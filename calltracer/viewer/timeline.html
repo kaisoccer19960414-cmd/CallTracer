@@ -90,18 +90,35 @@
     const row = document.createElement("div");
     row.className = "row";
 
-    const sourceClass = event.source === "javascript" ? "source-javascript" : "source-python";
-    const typeClass = event.type === "return" ? "return" : "call";
+    if (event.type === "adapter_error") {
+      const payload = event.payload || {};
+      row.innerHTML = '<span style="color:#ff6b6b">[JSAdapter エラー] ' +
+        escapeHtml(payload.message || "") + '</span>';
+      timelineEl.appendChild(row);
+      window.scrollTo(0, document.body.scrollHeight);
+      return;
+    }
 
-    const arrow = event.type === "return" ? "<-" : "->";
-    const label = event.type === "return" ? "RETURN" : (event.type || "").toUpperCase();
+    // call系: call, fetch_start / return系: return, fetch_end
+    const isReturnLike = (event.type === "return" || event.type === "fetch_end");
+
+    const sourceClass = event.source === "javascript" ? "source-javascript" : "source-python";
+    const typeClass = isReturnLike ? "return" : "call";
+
+    const arrow = isReturnLike ? "<-" : "->";
+    const label = (event.type || "").toUpperCase();
 
     const payload = event.payload || {};
     const fn = payload.function || payload.url || "(unknown)";
-    const extra = event.type === "return"
-      ? ""
-      : (payload.args_summary ? "(" + payload.args_summary + ")" : (payload.method ? " " + payload.method : ""));
 
+    let extra = "";
+    if (event.type === "call") {
+      extra = payload.args_summary ? "(" + payload.args_summary + ")" : "";
+    } else if (event.type === "fetch_start") {
+      extra = payload.method ? " " + payload.method : "";
+    } else if (event.type === "fetch_end") {
+      extra = (payload.status !== undefined) ? " status=" + payload.status : "";
+    }
     const time = event.timestamp
       ? new Date(event.timestamp * 1000).toISOString().substr(11, 12)
       : "";
