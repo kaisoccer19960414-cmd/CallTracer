@@ -43,14 +43,25 @@ class JSAdapter:
         stop() -> 監視を停止する
     """
 
-    def __init__(self, cdp_http_url: str = "http://localhost:9222"):
+    def __init__(
+        self,
+        cdp_http_url: str = "http://localhost:9222",
+        target_url_contains: Optional[str] = None,
+    ):
         """
         Args:
             cdp_http_url: Chromeのリモートデバッグ用HTTPエンドポイント。
                           `chrome --remote-debugging-port=9222` した場合は
                           デフォルトの "http://localhost:9222" のままでよい。
+            target_url_contains: 接続先タブを選ぶ際、このURL部分文字列を
+                          含むタブを優先的に選ぶ(例: "localhost:8000")。
+                          複数タブが開いている環境で、意図しないタブ
+                          (新しいタブなど)に接続してしまうのを防ぐため。
+                          Noneの場合は最初に見つかったpageタイプを使う
+                          (タブが1つしかない前提のシンプルな挙動)。
         """
         self._cdp_http_url = cdp_http_url.rstrip("/")
+        self._target_url_contains = target_url_contains
         self._event_queue: Optional["queue.Queue[dict[str, Any]]"] = None
         self._id_counter = itertools.count(1)
         self._thread: Optional[threading.Thread] = None
@@ -113,8 +124,11 @@ class JSAdapter:
             listen_task.cancel()
 
     def _discover_websocket_url(self) -> Optional[str]:
-        """Chromeの /json エンドポイントから、最初に見つかったページタブの
-        webSocketDebuggerUrl を取得する(標準ライブラリのみで完結させる)。
+        """Chromeの /json エンドポイントから、対象タブの webSocketDebuggerUrl を取得する
+        (標準ライブラリのみで完結させる)。
+
+        target_url_containsが指定されていれば、それを含むURLのタブを優先する。
+        見つからなければ、最初に見つかったpageタイプにフォールバックする。
         """
         try:
             with urllib.request.urlopen(f"{self._cdp_http_url}/json", timeout=3) as resp:
@@ -122,9 +136,21 @@ class JSAdapter:
         except Exception:
             return None
 
-        for target in targets:
-            if target.get("type") == "page" and "webSocketDebuggerUrl" in target:
-                return target["webSocketDebuggerUrl"]
+        page_targets = [
+            t for t in targets
+            if t.get("type") == "page" and "webSocketDebuggerUrl" in t
+        ]
+
+        if self._target_url_contains:
+            for target in page_targets:
+                if self._target_url_contains in target.get("url", ""):
+                    return target["webSocketDebuggerUrl"]
+            # 一致するタブが見つからない場合は、見つからなかった旨を
+            # エラーとして扱う(誤ったタブに繋いで無言で失敗するより良いため)
+            return None
+
+        if page_targets:
+            return page_targets[0]["webSocketDebuggerUrl"]
         return None
 
     async def _send(self, ws, method: str, params: dict[str, Any]) -> None:
